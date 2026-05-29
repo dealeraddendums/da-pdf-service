@@ -1,0 +1,22 @@
+{
+  "name": "da-pdf-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DealerAddendums PDF microservice — Puppeteer + pdf-lib renderer for addendums, infosheets, and FTC Buyer's Guide overlays. Internal service called from da-platform; no public-facing surface.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1031.0",
+    "express": "^4.21.2",
+    "dotenv": "^16.4.7",
+    "pdf-lib": "^1.17.1",
+    "puppeteer": "^24.41.0",
+    "uuid": "^10.0.0"
+  }
+}
