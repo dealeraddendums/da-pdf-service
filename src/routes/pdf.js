@@ -3,72 +3,72 @@
 const { Router } = require("express");
 const auth = require("../middleware/auth");
 const { createJob, getJob } = require("../lib/job-store");
+const { enqueueJob } = require("../lib/worker");
 
 const router = Router();
 router.use(auth);
 
 /**
- * POST /api/pdf/generate    — render a single addendum or infosheet to PDF.
- * POST /api/pdf/bulk         — render N vehicles into one combined PDF.
- * POST /api/pdf/buyer-guide  — overlay variable text onto an FTC BG PDF.
+ * Render endpoints. All three return { jobId } immediately and the
+ * actual Puppeteer / pdf-lib / S3 work happens in worker.js on the
+ * event loop's next tick. Client polls GET /api/pdf/status/:jobId.
  *
- * All three return { jobId } immediately. The renderer runs async in the
- * worker (added in Phase C). Client polls GET /api/pdf/status/:jobId.
+ * Body shape per kind:
+ *   generate     { html, paperSize?, customDims?, allPages?, s3Key? }
+ *   bulk         { jobs: [{ html, paperSize?, customDims?, allPages? }, ...], s3Key? }
+ *   buyer-guide  { srcPdfBase64, input: {...}, s3Key? }
  *
- * For Phase B these are STUBS — they validate the auth + payload shape
- * and create a pending job that never transitions. Phase C wires in the
- * Puppeteer / pdf-lib renderer ported from da-platform.
+ * paperSize default is "standard" (4.25"x11" addendum). s3Key is the
+ * canonical key da-platform wants the output uploaded to; if absent the
+ * worker writes to pdf-service/YYYY-MM-DD/<jobId>.pdf so the result is
+ * still retrievable.
  */
 
 router.post("/generate", (req, res) => {
-  const { html, s3KeyHint } = req.body ?? {};
+  const { html, s3Key } = req.body ?? {};
   if (typeof html !== "string" || html.length === 0) {
     return res.status(400).json({ error: "html (string) is required" });
   }
   const job = createJob();
   job.kind = "generate";
-  job.s3KeyHint = s3KeyHint ?? null;
-  // Phase C will actually enqueue the render here. For now mark complete
-  // with no output — purely a contract check.
+  job.s3Key = s3Key ?? null;
+  enqueueJob(job, req.body);
   res.json({ jobId: job.id });
 });
 
 router.post("/bulk", (req, res) => {
-  const { jobs: vehicleHtmlList, s3KeyHint } = req.body ?? {};
-  if (!Array.isArray(vehicleHtmlList) || vehicleHtmlList.length === 0) {
-    return res.status(400).json({ error: "jobs (array of {html}) is required" });
+  const { jobs: vehicleJobs, s3Key } = req.body ?? {};
+  if (!Array.isArray(vehicleJobs) || vehicleJobs.length === 0) {
+    return res.status(400).json({ error: "jobs (non-empty array) is required" });
+  }
+  for (let i = 0; i < vehicleJobs.length; i++) {
+    if (typeof vehicleJobs[i]?.html !== "string" || !vehicleJobs[i].html) {
+      return res.status(400).json({ error: `jobs[${i}].html is required` });
+    }
   }
   const job = createJob();
   job.kind = "bulk";
-  job.count = vehicleHtmlList.length;
-  job.s3KeyHint = s3KeyHint ?? null;
+  job.count = vehicleJobs.length;
+  job.s3Key = s3Key ?? null;
+  enqueueJob(job, req.body);
   res.json({ jobId: job.id });
 });
 
 router.post("/buyer-guide", (req, res) => {
-  const { templateKey, fields, s3KeyHint } = req.body ?? {};
-  if (typeof templateKey !== "string" || !fields || typeof fields !== "object") {
-    return res.status(400).json({ error: "templateKey + fields are required" });
+  const { srcPdfBase64, input, s3Key } = req.body ?? {};
+  if (typeof srcPdfBase64 !== "string" || srcPdfBase64.length === 0) {
+    return res.status(400).json({ error: "srcPdfBase64 (string) is required" });
+  }
+  if (!input || typeof input !== "object" || !input.warranty || !input.dealer || !input.vehicle) {
+    return res.status(400).json({ error: "input.{warranty, dealer, vehicle} required" });
   }
   const job = createJob();
   job.kind = "buyer-guide";
-  job.templateKey = templateKey;
-  job.fieldCount = Object.keys(fields).length;
-  job.s3KeyHint = s3KeyHint ?? null;
+  job.s3Key = s3Key ?? null;
+  enqueueJob(job, req.body);
   res.json({ jobId: job.id });
 });
 
-/**
- * GET /api/pdf/status/:jobId
- *
- * Polled by da-platform after a successful POST to one of the render
- * endpoints. Returns one of:
- *   { jobId, status: "pending" | "running" }
- *   { jobId, status: "complete", s3Key, signedUrl }
- *   { jobId, status: "failed", error }
- *
- * 404 once the job ages out of the in-memory store (default 30 min).
- */
 router.get("/status/:jobId", (req, res) => {
   const job = getJob(req.params.jobId);
   if (!job) return res.status(404).json({ error: "Job not found or expired" });
