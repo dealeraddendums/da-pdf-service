@@ -47,13 +47,33 @@ async function runBulk(job, body) {
   // One shared Chrome process for the whole batch — launching one
   // browser per vehicle was the legacy hot-spot.
   const browser = await launchBrowser();
+  const perItemResults = []; // { s3Key, error? } parallel to items
   let merged;
   try {
     const individualPdfs = [];
-    for (const item of items) {
-      const { html, paperSize = "standard", customDims, allPages = false } = item;
-      const buf = await renderPdf(html, paperSize, { customDims, allPages, browser });
-      individualPdfs.push(buf);
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const { html, paperSize = "standard", customDims, allPages = false, s3Key: itemKey } = item;
+      try {
+        const buf = await renderPdf(html, paperSize, { customDims, allPages, browser });
+        individualPdfs.push(buf);
+        // Upload per-item if caller supplied a per-vehicle key. Lets
+        // da-platform skip its own uploadPdf in the bulk DB-logging
+        // pipeline.
+        if (itemKey) {
+          await uploadPdf(itemKey, buf);
+          perItemResults.push({ s3Key: itemKey });
+        } else {
+          perItemResults.push({ s3Key: null });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[worker bulk] item ${i} failed:`, message);
+        perItemResults.push({ s3Key: null, error: message });
+      }
+    }
+    if (individualPdfs.length === 0) {
+      throw new Error("bulk: every item failed to render");
     }
     merged = await PDFDocument.create();
     for (const buf of individualPdfs) {
@@ -67,6 +87,9 @@ async function runBulk(job, body) {
   const out = Buffer.from(await merged.save());
   const key = body.s3Key || defaultKey(job.id);
   await uploadPdf(key, out);
+  // Stash per-item results on the job so the status endpoint can return
+  // them alongside the merged signedUrl when status === "complete".
+  job.items = perItemResults;
   return { key };
 }
 

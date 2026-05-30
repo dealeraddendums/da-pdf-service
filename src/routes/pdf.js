@@ -69,13 +69,23 @@ router.post("/buyer-guide", (req, res) => {
   res.json({ jobId: job.id });
 });
 
-router.get("/status/:jobId", (req, res) => {
+router.get("/status/:jobId", async (req, res) => {
   const job = getJob(req.params.jobId);
   if (!job) return res.status(404).json({ error: "Job not found or expired" });
   const out = { jobId: job.id, status: job.status };
   if (job.status === "complete") {
     out.s3Key = job.s3Key;
     out.signedUrl = job.signedUrl;
+    // Bulk: surface per-item s3Keys + signedUrls so da-platform can
+    // skip its own uploadPdf and just record print_history rows.
+    if (Array.isArray(job.items)) {
+      const { signedGetUrl } = require("../lib/s3");
+      out.items = await Promise.all(job.items.map(async (it) => {
+        if (it.s3Key) return { s3Key: it.s3Key, signedUrl: await signedGetUrl(it.s3Key) };
+        if (it.error) return { s3Key: null, error: it.error };
+        return { s3Key: null };
+      }));
+    }
   } else if (job.status === "failed") {
     out.error = job.error;
   }
