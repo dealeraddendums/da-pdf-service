@@ -21,13 +21,31 @@ const client = new S3Client({ region: REGION });
 
 const SIGNED_URL_TTL_SECONDS = 15 * 60;
 
-async function uploadPdf(key, buffer) {
-  await client.send(new PutObjectCommand({
+/**
+ * @param {string} key
+ * @param {Buffer} buffer
+ * @param {Object} [opts]
+ * @param {Object<string,string>} [opts.tags]  Object tag set to attach to
+ *   the PutObject. Becomes the S3 `Tagging` query-string. Used to drive
+ *   lifecycle rules — e.g. { doc_type: "addendum" } → expires in 180d,
+ *   { doc_type: "buyer_guide" } → expires in 1d. PutObject Tagging
+ *   REPLACES any prior tag set on the object, so every uploader that
+ *   wants the lifecycle behavior must include the tag explicitly.
+ */
+async function uploadPdf(key, buffer, opts = {}) {
+  const params = {
     Bucket: BUCKET,
     Key: key,
     Body: buffer,
     ContentType: "application/pdf",
-  }));
+  };
+  if (opts.tags && Object.keys(opts.tags).length > 0) {
+    // Tagging is a URL-encoded "key=value&key2=value2" string.
+    params.Tagging = Object.entries(opts.tags)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join("&");
+  }
+  await client.send(new PutObjectCommand(params));
   return { bucket: BUCKET, key };
 }
 
