@@ -73,6 +73,24 @@ async function renderPdf(html, paperSize, opts = {}) {
     const page = await browser.newPage();
     await page.setViewport({ width: cssW, height: cssH, deviceScaleFactor: 1.5625 });
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+    // External <img>s (e.g. product-brand logos served from S3) load over the
+    // network *after* the DOM is parsed. domcontentloaded fires before they
+    // finish, so capturing immediately renders them blank (the KARR logo bug).
+    // Wait for every image to settle (load or error), capped at 15s so one hung
+    // request can't stall the job. Base64-inlined images (logo/QR/photo) are
+    // already complete and resolve instantly.
+    await Promise.race([
+      page.evaluate(() => Promise.all(
+        Array.from(document.images).map((img) =>
+          img.complete ? null : new Promise((res) => {
+            img.addEventListener("load", res, { once: true });
+            img.addEventListener("error", res, { once: true });
+          })
+        )
+      )),
+      new Promise((res) => setTimeout(res, 15_000)),
+    ]).catch(() => {});
     const pdfBuffer = await page.pdf({
       width: widthStr,
       height: heightStr,
