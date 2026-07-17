@@ -4,6 +4,7 @@ const { Router } = require("express");
 const auth = require("../middleware/auth");
 const { createJob, getJob } = require("../lib/job-store");
 const { enqueueJob } = require("../lib/worker");
+const { extractStyles } = require("../lib/style-extractor");
 
 const router = Router();
 router.use(auth);
@@ -67,6 +68,33 @@ router.post("/buyer-guide", (req, res) => {
   job.s3Key = s3Key ?? null;
   enqueueJob(job, req.body);
   res.json({ jobId: job.id });
+});
+
+/**
+ * "Match from URL" (2026-07-17): load a dealer's live page and return the
+ * computed styles of the button whose text matches. SYNCHRONOUS (no job
+ * store) — the page load is bounded to ~25 s inside the extractor, and the
+ * caller (da-platform match-from-url) holds the request open. SSRF guards
+ * (private-IP DNS gate, redirect cap, byte/time caps) live in the extractor.
+ */
+router.post("/extract-styles", async (req, res) => {
+  const { url, buttonText } = req.body ?? {};
+  if (typeof url !== "string" || !url.trim()) {
+    return res.status(400).json({ error: "url (string) is required" });
+  }
+  if (typeof buttonText !== "string" || !buttonText.trim() || buttonText.length > 120) {
+    return res.status(400).json({ error: "buttonText (string, ≤120 chars) is required" });
+  }
+  try {
+    const result = await extractStyles(url.trim(), buttonText.trim());
+    if (result.error) {
+      return res.status(result.blocked ? 422 : 404).json({ error: result.error, blocked: !!result.blocked });
+    }
+    return res.json(result);
+  } catch (e) {
+    console.error("[extract-styles] failed:", e);
+    return res.status(500).json({ error: "Extraction failed" });
+  }
 });
 
 router.get("/status/:jobId", async (req, res) => {
