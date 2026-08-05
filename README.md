@@ -56,3 +56,36 @@ curl http://localhost:3001/api/health
 - This service stays small. The HTML template generator (`lib/pdf-html.ts`) lives in da-platform and is sent over the wire — the PDF service is dumb about what's in the page, it just renders.
 - No Supabase, no Postgres, no Aurora. Job state lives in memory; if we scale beyond one instance later, swap `src/lib/job-store.js` for Redis.
 - Same `dealer-addendums` S3 bucket as the main app, same key conventions.
+
+## Box fonts (REQUIRED on rebuild)
+
+The rendered HTML declares `font-family: -apple-system, Roboto, Arial, sans-serif`
+(pdf-html.ts in da-platform) and the Builder canvas uses true Roboto (Google
+Fonts) — the render box MUST have Roboto installed or PDFs render in
+Liberation Sans (wider), wrapping text that fits on the canvas ("fits on
+canvas, wraps in print", the 2026-08 Napleton incident). Installed 2026-08-05:
+
+```bash
+sudo apt-get install -y fonts-roboto     # Regular/Bold/Italic + Thin/Light/Medium/Black
+sudo tee /etc/fonts/local.conf           # pin generic aliases — see below
+sudo fc-cache -f
+pm2 restart da-pdf-service
+```
+
+`/etc/fonts/local.conf` must pin the generic families — without it fontconfig
+resolves them arbitrarily (post-install everything matched Roboto Condensed,
+which broke the monospace price columns):
+
+```xml
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <alias><family>sans-serif</family><prefer><family>Roboto</family></prefer></alias>
+  <alias><family>monospace</family><prefer><family>Liberation Mono</family></prefer></alias>
+  <alias><family>serif</family><prefer><family>Liberation Serif</family></prefer></alias>
+</fontconfig>
+```
+
+Verify: `fc-match Roboto` → Roboto-Regular.ttf; `fc-match monospace` →
+LiberationMono-Regular.ttf. Rollback: `sudo apt-get remove fonts-roboto`,
+delete local.conf, `fc-cache -f`, restart.
