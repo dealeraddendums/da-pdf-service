@@ -123,9 +123,12 @@ async function runBulk(job, body) {
 
 async function runBuyerGuide(job, body) {
   const { srcPdfBase64, input } = body;
-  if (!srcPdfBase64) throw new Error("buyer-guide: srcPdfBase64 required");
+  // Pre-printed-label mode (input.preprinted): data-only render on blank
+  // pages — no background bytes required.
+  const isPreprinted = Boolean(input && typeof input === "object" && input.preprinted);
+  if (!srcPdfBase64 && !isPreprinted) throw new Error("buyer-guide: srcPdfBase64 required");
   if (!input) throw new Error("buyer-guide: input required");
-  const srcBytes = Buffer.from(srcPdfBase64, "base64");
+  const srcBytes = srcPdfBase64 ? Buffer.from(srcPdfBase64, "base64") : null;
   const out = await applyBuyerGuideOverlay(srcBytes, input);
   const key = body.s3Key || defaultKey(job.id);
   // Buyer's guide is print-only — tag for 1-day lifecycle.
