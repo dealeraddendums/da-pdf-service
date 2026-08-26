@@ -25,8 +25,8 @@ const YEAR_X  = 310;
 const VIN_X   = 390;
 
 const EN_P0 = {
-  asIs:    { cx: 92, cy: 585, sz: 11 },
-  dlrW:    { cx: 92, cy: 535, sz: 11 },
+  asIs:    { cx: 92, cy: 585, sz:  8 },
+  dlrW:    { cx: 92, cy: 535, sz:  8 },
   full:    { cx: 99, cy: 510, sz:  4 },
   lim:     { cx: 99, cy: 492, sz:  4 },
   laborX:  280, laborY:  489,
@@ -40,8 +40,8 @@ const EN_P0 = {
 };
 
 const EN_P1 = {
-  implied: { cx: 92, cy: 586, sz: 11 },
-  dlrW:    { cx: 92, cy: 536, sz: 11 },
+  implied: { cx: 92, cy: 586, sz:  8 },
+  dlrW:    { cx: 92, cy: 536, sz:  8 },
   full:    { cx: 99, cy: 511, sz:  4 },
   lim:     { cx: 99, cy: 493, sz:  4 },
   laborX:  280, laborY:  490,
@@ -55,8 +55,8 @@ const EN_P1 = {
 };
 
 const ES_P0 = {
-  asIs:    { cx: 92, cy: 585, sz: 11 },
-  dlrW:    { cx: 92, cy: 508, sz: 11 },
+  asIs:    { cx: 92, cy: 585, sz:  8 },
+  dlrW:    { cx: 92, cy: 508, sz:  8 },
   full:    { cx: 99, cy: 510, sz:  4 },
   lim:     { cx: 99, cy: 465, sz:  4 },
   laborX:  312, laborY:  462,
@@ -70,8 +70,8 @@ const ES_P0 = {
 };
 
 const ES_P1 = {
-  implied: { cx: 92, cy: 586, sz: 11 },
-  dlrW:    { cx: 92, cy: 536, sz: 11 },
+  implied: { cx: 92, cy: 586, sz:  8 },
+  dlrW:    { cx: 92, cy: 536, sz:  8 },
   full:    { cx: 99, cy: 511, sz:  4 },
   lim:     { cx: 99, cy: 493, sz:  4 },
   laborX:  280, laborY:  490,
