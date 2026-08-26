@@ -114,13 +114,33 @@ function drawPct(page, font, x, y, val) {
 // ── Main export ──────────────────────────────────────────────────────────────
 
 /**
- * @param {Buffer} srcPdfBytes   The FTC background PDF da-platform fetched
+ * @param {Buffer|null} srcPdfBytes  The FTC background PDF da-platform fetched
  *                               from Supabase Storage (or its asset fallback).
  *                               Must have at least 2 pages (front + back).
- * @param {Object} input         { language, vehicle, dealer, warranty }
+ *                               May be null in pre-printed-label mode.
+ * @param {Object} input         { language, vehicle, dealer, warranty,
+ *                                 preprinted? }
+ *
+ * PRE-PRINTED-LABEL MODE (2026-08-25): when input.preprinted is set, the
+ * dealer prints on their OWN FTC label stock, so the output is DATA-ONLY on
+ * blank 612×792 pages (no background), with every field placed at its
+ * calibrated default coordinate + the dealer's saved offsets:
+ *   preprinted = { global: {x, y}, fields: { [key]: {x, y} } }   (PDF points)
+ * Field keys: make, model, year, vin, asIs, implied, dlrW, full, lim, labor,
+ * parts, systems, duration, mfrNew, mfrUsed, othUsed, svcCont (front);
+ * name, addr, phone, email, complaints (back). The variable-field SET is
+ * unchanged — repositioning only, never omission (compliance).
  */
 async function applyBuyerGuideOverlay(srcPdfBytes, input) {
   const { language: lang, vehicle: v, dealer: d, warranty: w } = input;
+
+  const pp = input.preprinted && typeof input.preprinted === "object" ? input.preprinted : null;
+  const gx = pp ? Number(pp.global && pp.global.x) || 0 : 0;
+  const gy = pp ? Number(pp.global && pp.global.y) || 0 : 0;
+  const fo = (key) => (pp && pp.fields && pp.fields[key]) || {};
+  const ox = (key, x) => x + gx + (Number(fo(key).x) || 0);
+  const oy = (key, y) => y + gy + (Number(fo(key).y) || 0);
+  const oCB = (key, cb) => (pp ? { ...cb, cx: ox(key, cb.cx), cy: oy(key, cb.cy) } : cb);
 
   const isAsIs    = w.warranty_type === "as_is";
   const isImplied = w.warranty_type === "implied_only";
@@ -128,11 +148,17 @@ async function applyBuyerGuideOverlay(srcPdfBytes, input) {
   const isLimited = w.warranty_type === "limited";
   const hasDealerW = isFull || isLimited;
 
-  const srcDoc = await PDFDocument.load(srcPdfBytes);
   const outDoc = await PDFDocument.create();
-  const [front, back] = await outDoc.copyPages(srcDoc, [0, 1]);
-  outDoc.addPage(front);
-  outDoc.addPage(back);
+  if (pp) {
+    // Data-only: two blank US-Letter pages — the dealer's label stock IS the form.
+    outDoc.addPage([612, 792]);
+    outDoc.addPage([612, 792]);
+  } else {
+    const srcDoc = await PDFDocument.load(srcPdfBytes);
+    const [front, back] = await outDoc.copyPages(srcDoc, [0, 1]);
+    outDoc.addPage(front);
+    outDoc.addPage(back);
+  }
 
   const font     = await outDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await outDoc.embedFont(StandardFonts.HelveticaBold);
@@ -143,29 +169,29 @@ async function applyBuyerGuideOverlay(srcPdfBytes, input) {
     ? (isImplied ? ES_P1 : ES_P0)
     : (isImplied ? EN_P1 : EN_P0);
 
-  drawTxt(fp, font, MAKE_X,  VROW_Y, v.make  ?? "");
-  drawTxt(fp, font, MODEL_X, VROW_Y, v.model ?? "");
-  drawTxt(fp, font, YEAR_X,  VROW_Y, v.year  ?? "");
-  drawTxt(fp, font, VIN_X,   VROW_Y, v.vin   ?? "");
+  drawTxt(fp, font, ox("make", MAKE_X),   oy("make", VROW_Y),  v.make  ?? "");
+  drawTxt(fp, font, ox("model", MODEL_X), oy("model", VROW_Y), v.model ?? "");
+  drawTxt(fp, font, ox("year", YEAR_X),   oy("year", VROW_Y),  v.year  ?? "");
+  drawTxt(fp, font, ox("vin", VIN_X),     oy("vin", VROW_Y),   v.vin   ?? "");
 
-  if (isAsIs    && "asIs"    in C) drawX(fp, C.asIs);
-  if (isImplied && "implied" in C) drawX(fp, C.implied);
-  if (hasDealerW) drawX(fp, C.dlrW);
+  if (isAsIs    && "asIs"    in C) drawX(fp, oCB("asIs", C.asIs));
+  if (isImplied && "implied" in C) drawX(fp, oCB("implied", C.implied));
+  if (hasDealerW) drawX(fp, oCB("dlrW", C.dlrW));
 
-  if (isFull) drawX(fp, C.full);
+  if (isFull) drawX(fp, oCB("full", C.full));
   if (isLimited) {
-    drawX(fp, C.lim);
-    drawPct(fp, fontBold, C.laborX, C.laborY, w.labor_pct);
-    drawPct(fp, fontBold, C.partsX, C.partsY, w.parts_pct);
+    drawX(fp, oCB("lim", C.lim));
+    drawPct(fp, fontBold, ox("labor", C.laborX), oy("labor", C.laborY), w.labor_pct);
+    drawPct(fp, fontBold, ox("parts", C.partsX), oy("parts", C.partsY), w.parts_pct);
   }
-  if (hasDealerW && w.systems_covered) drawTxt(fp, font, C.sysX, C.sysY, w.systems_covered, 7.5);
-  if (hasDealerW && w.duration)        drawTxt(fp, font, C.durX, C.durY, w.duration, 7.5);
+  if (hasDealerW && w.systems_covered) drawTxt(fp, font, ox("systems", C.sysX), oy("systems", C.sysY), w.systems_covered, 7.5);
+  if (hasDealerW && w.duration)        drawTxt(fp, font, ox("duration", C.durX), oy("duration", C.durY), w.duration, 7.5);
 
   const ndw = w.non_dealer_warranties ?? [];
-  if (ndw.includes("mfr_new"))    drawX(fp, C.mfrNew);
-  if (ndw.includes("mfr_used"))   drawX(fp, C.mfrUsed);
-  if (ndw.includes("other_used")) drawX(fp, C.othUsed);
-  if (w.service_contract)         drawX(fp, C.svcCont);
+  if (ndw.includes("mfr_new"))    drawX(fp, oCB("mfrNew", C.mfrNew));
+  if (ndw.includes("mfr_used"))   drawX(fp, oCB("mfrUsed", C.mfrUsed));
+  if (ndw.includes("other_used")) drawX(fp, oCB("othUsed", C.othUsed));
+  if (w.service_contract)         drawX(fp, oCB("svcCont", C.svcCont));
 
   // Back page ─────────────────────────────────────────────────────────────────
   const bp = outDoc.getPage(1);
@@ -175,11 +201,11 @@ async function applyBuyerGuideOverlay(srcPdfBytes, input) {
   const dealerPhone = d.phone ?? "";
   const dealerEmail = w.dealer_email ?? d.email ?? "";
 
-  drawTxt(bp, font, BACK.nameX,  BACK.nameY,  dealerName,  8);
-  drawTxt(bp, font, BACK.addrX,  BACK.addrY,  dealerAddr,  8);
-  drawTxt(bp, font, BACK.phoneX, BACK.phoneY, dealerPhone, 8);
-  if (dealerEmail)         drawTxt(bp, font, BACK.emailX, BACK.emailY, dealerEmail, 8);
-  if (w.complaints_contact) drawTxt(bp, font, BACK.complaintsX, BACK.complaintsY, w.complaints_contact, 8);
+  drawTxt(bp, font, ox("name", BACK.nameX),   oy("name", BACK.nameY),  dealerName,  8);
+  drawTxt(bp, font, ox("addr", BACK.addrX),   oy("addr", BACK.addrY),  dealerAddr,  8);
+  drawTxt(bp, font, ox("phone", BACK.phoneX), oy("phone", BACK.phoneY), dealerPhone, 8);
+  if (dealerEmail)          drawTxt(bp, font, ox("email", BACK.emailX), oy("email", BACK.emailY), dealerEmail, 8);
+  if (w.complaints_contact) drawTxt(bp, font, ox("complaints", BACK.complaintsX), oy("complaints", BACK.complaintsY), w.complaints_contact, 8);
 
   const bytes = await outDoc.save();
   return Buffer.from(bytes);

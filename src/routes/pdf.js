@@ -57,7 +57,10 @@ router.post("/bulk", (req, res) => {
 
 router.post("/buyer-guide", (req, res) => {
   const { srcPdfBase64, input, s3Key } = req.body ?? {};
-  if (typeof srcPdfBase64 !== "string" || srcPdfBase64.length === 0) {
+  // Pre-printed-label mode renders data-only on blank pages — no background
+  // bytes needed. Full mode still requires the FTC source PDF.
+  const isPreprinted = Boolean(input && typeof input === "object" && input.preprinted);
+  if (!isPreprinted && (typeof srcPdfBase64 !== "string" || srcPdfBase64.length === 0)) {
     return res.status(400).json({ error: "srcPdfBase64 (string) is required" });
   }
   if (!input || typeof input !== "object" || !input.warranty || !input.dealer || !input.vehicle) {
