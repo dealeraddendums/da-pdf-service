@@ -24,6 +24,16 @@ const MODEL_X = 190;
 const YEAR_X  = 310;
 const VIN_X   = 390;
 
+// Systems Covered / Duration sections. sysY/durY = first-line baseline; each
+// box is word-wrapped to its width, lines step down by secPitch, and at most
+// secLines lines fit above the Non-Dealer Warranties heading (measured from
+// the FTC backgrounds at 288 dpi):
+//   English: 5 writing rules 15pt apart (418.5 … 358.5) — one line per rule.
+//   Spanish: no rules, ~50pt of open space — natural 10pt spacing.
+// Rules run x 79–295 (systems) and 309.5–525 (duration).
+const RULED_SECTION = { sysW: 227, durW: 210, secPitch: 15, secLines: 5 };
+const OPEN_SECTION  = { sysW: 227, durW: 210, secPitch: 10, secLines: 5 };
+
 const EN_P0 = {
   asIs:    { cx: 92, cy: 585, sz:  8 },
   dlrW:    { cx: 92, cy: 535, sz:  8 },
@@ -33,6 +43,7 @@ const EN_P0 = {
   partsX:  370, partsY:  489,
   sysX:     68, sysY:    419,
   durX:    315, durY:    419,
+  ...RULED_SECTION,
   mfrNew:  { cx: 85, cy: 325, sz: 4 },
   mfrUsed: { cx: 85, cy: 301, sz: 4 },
   othUsed: { cx: 85, cy: 285, sz: 4 },
@@ -46,8 +57,11 @@ const EN_P1 = {
   lim:     { cx: 99, cy: 493, sz:  4 },
   laborX:  280, laborY:  490,
   partsX:  370, partsY:  490,
-  sysX:     68, sysY:    420,
-  durX:    315, durY:    420,
+  // The IMPLIED page's sections sit 20pt lower (first rule at 398.5) and have
+  // only 4 rules. Was 420 = on top of the "SYSTEMS COVERED:" heading.
+  sysX:     68, sysY:    399,
+  durX:    315, durY:    399,
+  ...RULED_SECTION, secLines: 4,
   mfrNew:  { cx: 85, cy: 326, sz: 4 },
   mfrUsed: { cx: 85, cy: 302, sz: 4 },
   othUsed: { cx: 85, cy: 286, sz: 4 },
@@ -63,6 +77,7 @@ const ES_P0 = {
   partsX:  402, partsY:  462,
   sysX:     68, sysY:    392,
   durX:    315, durY:    392,
+  ...OPEN_SECTION,
   mfrNew:  { cx: 85, cy: 311, sz: 4 },
   mfrUsed: { cx: 85, cy: 292, sz: 4 },
   othUsed: { cx: 85, cy: 280, sz: 4 },
@@ -76,8 +91,10 @@ const ES_P1 = {
   lim:     { cx: 99, cy: 493, sz:  4 },
   laborX:  280, laborY:  490,
   partsX:  370, partsY:  490,
-  sysX:     68, sysY:    420,
-  durX:    315, durY:    420,
+  // Same section as ES_P0, 1pt lower on this page. Was 420 = in the paragraph above the heading.
+  sysX:     68, sysY:    391,
+  durX:    315, durY:    391,
+  ...OPEN_SECTION,
   mfrNew:  { cx: 85, cy: 312, sz: 4 },
   mfrUsed: { cx: 85, cy: 293, sz: 4 },
   othUsed: { cx: 85, cy: 281, sz: 4 },
@@ -104,6 +121,61 @@ function drawTxt(page, font, x, y, text, size = 8) {
   const t = (text ?? "").toString().trim();
   if (!t) return;
   page.drawText(t, { x, y, size, font, color: rgb(0, 0, 0) });
+}
+
+const BLOCK_SIZE = 7.5;
+const BLOCK_MIN_SIZE = 5.5;
+
+/** Word-wrap to `width`, keeping the operator's own line breaks as hard breaks. */
+function wrapBlock(font, text, size, width) {
+  const fits = (s) => font.widthOfTextAtSize(s, size) <= width;
+  const out = [];
+  for (const para of text.replace(/\r\n?/g, "\n").trim().split("\n")) {
+    let line = "";
+    for (let word of para.split(/\s+/).filter(Boolean)) {
+      // A single word wider than the box breaks by character.
+      while (!fits(word)) {
+        let n = word.length - 1;
+        while (n > 1 && !fits(word.slice(0, n))) n--;
+        if (line) { out.push(line); line = ""; }
+        out.push(word.slice(0, n));
+        word = word.slice(n);
+      }
+      if (line && !fits(`${line} ${word}`)) { out.push(line); line = word; }
+      else line = line ? `${line} ${word}` : word;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * Multi-line text box (Systems Covered / Duration): wraps to `width`, one line
+ * per `pitch`, never more than `maxLines`. Too long → shrink the font in 0.5pt
+ * steps (down to BLOCK_MIN_SIZE) while that saves lines; still too long → cut
+ * at the last line with "…".
+ * Never draws outside the box.
+ */
+function drawBlock(page, font, x, y, text, width, pitch, maxLines) {
+  const t = (text ?? "").toString().trim();
+  if (!t) return;
+  // Largest size that fits; if none does, the size with the fewest lines
+  // (largest on a tie) — shrinking can't help typed-in extra lines.
+  let size = BLOCK_SIZE;
+  let lines = wrapBlock(font, t, size, width);
+  for (let s = BLOCK_SIZE - 0.5; lines.length > maxLines && s >= BLOCK_MIN_SIZE; s -= 0.5) {
+    const l = wrapBlock(font, t, s, width);
+    if (l.length < lines.length) { size = s; lines = l; }
+  }
+  if (lines.length > maxLines) {
+    lines = lines.slice(0, maxLines);
+    let last = lines[maxLines - 1];
+    while (last && font.widthOfTextAtSize(`${last}…`, size) > width) last = last.slice(0, -1);
+    lines[maxLines - 1] = `${last.trimEnd()}…`;
+  }
+  lines.forEach((ln, i) => {
+    if (ln) page.drawText(ln, { x, y: y - i * pitch, size, font, color: rgb(0, 0, 0) });
+  });
 }
 
 function drawPct(page, font, x, y, val) {
@@ -184,8 +256,8 @@ async function applyBuyerGuideOverlay(srcPdfBytes, input) {
     drawPct(fp, fontBold, ox("labor", C.laborX), oy("labor", C.laborY), w.labor_pct);
     drawPct(fp, fontBold, ox("parts", C.partsX), oy("parts", C.partsY), w.parts_pct);
   }
-  if (hasDealerW && w.systems_covered) drawTxt(fp, font, ox("systems", C.sysX), oy("systems", C.sysY), w.systems_covered, 7.5);
-  if (hasDealerW && w.duration)        drawTxt(fp, font, ox("duration", C.durX), oy("duration", C.durY), w.duration, 7.5);
+  if (hasDealerW && w.systems_covered) drawBlock(fp, font, ox("systems", C.sysX), oy("systems", C.sysY), w.systems_covered, C.sysW, C.secPitch, C.secLines);
+  if (hasDealerW && w.duration)        drawBlock(fp, font, ox("duration", C.durX), oy("duration", C.durY), w.duration, C.durW, C.secPitch, C.secLines);
 
   const ndw = w.non_dealer_warranties ?? [];
   if (ndw.includes("mfr_new"))    drawX(fp, oCB("mfrNew", C.mfrNew));
@@ -211,4 +283,4 @@ async function applyBuyerGuideOverlay(srcPdfBytes, input) {
   return Buffer.from(bytes);
 }
 
-module.exports = { applyBuyerGuideOverlay };
+module.exports = { applyBuyerGuideOverlay, wrapBlock };
