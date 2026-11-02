@@ -24,6 +24,82 @@ const MODEL_X = 190;
 const YEAR_X  = 310;
 const VIN_X   = 390;
 
+// VIN barcode (2026-11-02, reinstating the 4.0 feature): Code 128 of the VIN,
+// bars only, right-aligned in the VIN column, in the open band between the
+// VIN caption (text bottom ≈ y 635.5) and the heavy rule under "WARRANTIES
+// FOR THIS VEHICLE:" (top ≈ y 612) — identical on all four FTC backgrounds.
+// x/y = bottom-left corner of the box. Gated by warranty.show_vin_barcode
+// (absent = ON). Keep in sync with da-platform lib/buyers-guide-pdf.ts.
+const BARCODE_X = 390;
+const BARCODE_Y = 614;
+const BARCODE_W = 158;
+const BARCODE_H = 19;
+
+// ── Code 128 encoder (subset B/C auto) ───────────────────────────────────────
+// Port of da-platform lib/code128-auto.ts — keep the two in sync.
+
+const C128_PATTERNS = [
+  "212222", "222122", "222221", "121223", "121322", "131222", "122213",
+  "122312", "132212", "221213", "221312", "231212", "112232", "122132",
+  "122231", "113222", "123122", "123221", "223211", "221132", "221231",
+  "213212", "223112", "312131", "311222", "321122", "321221", "312212",
+  "322112", "322211", "212123", "212321", "232121", "111323", "131123",
+  "131321", "112313", "132113", "132311", "211313", "231113", "231311",
+  "112133", "112331", "132131", "113123", "113321", "133121", "313121",
+  "211331", "231131", "213113", "213311", "213131", "311123", "311321",
+  "331121", "312113", "312311", "332111", "314111", "221411", "431111",
+  "111224", "111422", "121124", "121421", "141122", "141221", "112214",
+  "112412", "122114", "122411", "142112", "142211", "241211", "221114",
+  "413111", "241112", "134111", "111242", "121142", "121241", "114212",
+  "124112", "124211", "411212", "421112", "421211", "212141", "214121",
+  "412121", "111143", "111341", "131141", "114113", "114311", "411113",
+  "411311", "113141", "114131", "311141", "411131", "211412", "211214",
+  "211232",
+];
+const C128_STOP = "2331112";
+const C128_QUIET = 10;
+const C128_START_B = 104, C128_START_C = 105, C128_CODE_B = 100, C128_CODE_C = 99;
+
+function c128DigitRun(text, i) {
+  let n = 0;
+  while (i + n < text.length && text[i + n] >= "0" && text[i + n] <= "9") n++;
+  return n;
+}
+
+function code128AutoWidths(text) {
+  if (!text) throw new Error("Code 128: empty input");
+  const pushB = (values, ch) => {
+    const code = ch.charCodeAt(0);
+    if (code < 32 || code > 126) throw new Error(`Code 128B cannot encode char ${JSON.stringify(ch)}`);
+    values.push(code - 32);
+  };
+  const r0 = c128DigitRun(text, 0);
+  let set = r0 >= 4 && r0 % 2 === 0 ? "C" : "B";
+  const values = [set === "C" ? C128_START_C : C128_START_B];
+  let i = 0;
+  while (i < text.length) {
+    if (set === "C") {
+      if (c128DigitRun(text, i) >= 2) { values.push(Number(text.slice(i, i + 2))); i += 2; }
+      else { values.push(C128_CODE_B); set = "B"; }
+    } else {
+      const r = c128DigitRun(text, i);
+      const runEndsData = i + r === text.length;
+      if (r >= 6 || (runEndsData && r >= 4)) {
+        if (r % 2 === 1) { pushB(values, text[i]); i++; }
+        values.push(C128_CODE_C);
+        set = "C";
+      } else { pushB(values, text[i]); i++; }
+    }
+  }
+  let checksum = values[0];
+  for (let k = 1; k < values.length; k++) checksum += values[k] * k;
+  values.push(checksum % 103);
+  const widths = [];
+  for (const v of values) for (const w of C128_PATTERNS[v]) widths.push(Number(w));
+  for (const w of C128_STOP) widths.push(Number(w));
+  return widths;
+}
+
 // Systems Covered / Duration sections. sysY/durY = first-line baseline; each
 // box is word-wrapped to its width, lines step down by secPitch, and at most
 // secLines lines fit above the Non-Dealer Warranties heading (measured from
@@ -183,6 +259,26 @@ function drawPct(page, font, x, y, val) {
   page.drawText(String(val), { x, y, size: 9, font, color: rgb(0, 0, 0) });
 }
 
+/**
+ * Code 128 VIN barcode as pdf-lib rectangles (vector, crisp at print). The
+ * symbol stretches to fill the box — bar:space RATIOS stay exact, which is
+ * what scanners read. White background includes the 10-module quiet zones.
+ * An un-encodable value draws nothing — the barcode can never fail a print.
+ * Keep in sync with da-platform lib/buyers-guide-pdf.ts drawVinBarcode().
+ */
+function drawVinBarcode(page, vin, x, y, w, h) {
+  let widths;
+  try { widths = code128AutoWidths(vin); } catch { return; }
+  const totalModules = widths.reduce((a, b) => a + b, 0) + C128_QUIET * 2;
+  const mod = w / totalModules;
+  page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 1, 1) });
+  let cx = x + C128_QUIET * mod;
+  for (let i = 0; i < widths.length; i++) {
+    if (i % 2 === 0) page.drawRectangle({ x: cx, y, width: widths[i] * mod, height: h, color: rgb(0, 0, 0) });
+    cx += widths[i] * mod;
+  }
+}
+
 // ── Main export ──────────────────────────────────────────────────────────────
 
 /**
@@ -245,6 +341,13 @@ async function applyBuyerGuideOverlay(srcPdfBytes, input) {
   drawTxt(fp, font, ox("model", MODEL_X), oy("model", VROW_Y), v.model ?? "");
   drawTxt(fp, font, ox("year", YEAR_X),   oy("year", VROW_Y),  v.year  ?? "");
   drawTxt(fp, font, ox("vin", VIN_X),     oy("vin", VROW_Y),   v.vin   ?? "");
+
+  // VIN barcode — under the VIN, right-aligned to the VIN column. Gated by
+  // the dealer's show_vin_barcode default (absent = ON, matching 4.0).
+  const barcodeVin = ((v.vin ?? "") + "").trim();
+  if (w.show_vin_barcode !== false && barcodeVin) {
+    drawVinBarcode(fp, barcodeVin, ox("vinBarcode", BARCODE_X), oy("vinBarcode", BARCODE_Y), BARCODE_W, BARCODE_H);
+  }
 
   if (isAsIs    && "asIs"    in C) drawX(fp, oCB("asIs", C.asIs));
   if (isImplied && "implied" in C) drawX(fp, oCB("implied", C.implied));
